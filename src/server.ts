@@ -10,7 +10,6 @@ import { embed, init as initEmbedder } from "./embedder.js";
 export async function startServer(vaultPath: string) {
   const resolvedPath = path.resolve(vaultPath);
   const dbPath = path.join(resolvedPath, ".obsidian-mcp.db");
-  const store = createStore(dbPath);
 
   const ignoredKeys = process.env.OBSIDIAN_IGNORED_KEYS?.split(",").map((k) =>
     k.trim(),
@@ -20,13 +19,47 @@ export async function startServer(vaultPath: string) {
   console.error(`Vault: ${resolvedPath}`);
   console.error(`Database: ${dbPath}`);
 
-  console.error("Indexing vault (incremental)...");
-  await indexVault(resolvedPath, store, { ignoredKeys });
+  // console.error("Indexing vault (incremental)...");
+  // await indexVault(resolvedPath, store, { ignoredKeys });
 
+  // const server = new McpServer({
+  //   name: "obsidian-vault",
+  //   version: "0.1.0",
+  // });
+
+  // Lazy state — initialized after connection
+  let store: ReturnType<typeof createStore> | undefined;
+  let ready: Promise<void>;
   const server = new McpServer({
     name: "obsidian-vault",
     version: "0.1.0",
   });
+  // Heavy init happens AFTER the MCP handshake completes
+  server.server.oninitialized = () => {
+    ready = (async () => {
+      console.error("Initializing embedder...");
+      await initEmbedder();
+      try {
+        store = createStore(dbPath);
+      } catch (err) {
+        console.error("Failed to create store:", err);
+      }
+      if (store) {
+        try {
+          console.error("Indexing vault (incremental)...");
+          await indexVault(resolvedPath, store, { ignoredKeys });
+        } catch (err) {
+          console.error("Failed to index vault:", err);
+        }
+      }
+      console.error("Ready.");
+    })();
+  };
+  // Helper — tool handlers call this to wait for init
+  async function getStore() {
+    await ready;
+    return store!;
+  }
 
   server.tool(
     "search_notes",
@@ -42,6 +75,7 @@ export async function startServer(vaultPath: string) {
     },
     async ({ query, limit }) => {
       const [queryEmbedding] = await embed([query], "query");
+      const store = await getStore();
       const results = store.search(queryEmbedding, limit);
       const formatted = results.map((r, i) => {
         const tags = JSON.parse(r.tags) as string[];
@@ -102,6 +136,7 @@ export async function startServer(vaultPath: string) {
     "List all tags found across the Obsidian vault.",
     {},
     async () => {
+      const store = await getStore();
       const tags = store.getTags();
       return {
         content: [
@@ -121,6 +156,7 @@ export async function startServer(vaultPath: string) {
       tag: z.string().describe("Tag to search for (without #)"),
     },
     async ({ tag }) => {
+      const store = await getStore();
       const results = store.searchByTag(tag);
       const files = [...new Set(results.map((r) => r.file))];
       const formatted = files.map((f) => {
@@ -149,6 +185,7 @@ export async function startServer(vaultPath: string) {
         .describe("Force full re-index (ignore cache)"),
     },
     async ({ force }) => {
+      const store = await getStore();
       const stats = await indexVault(resolvedPath, store, {
         force,
         ignoredKeys,
@@ -169,6 +206,7 @@ export async function startServer(vaultPath: string) {
     "Get statistics about the indexed vault.",
     {},
     async () => {
+      const store = await getStore();
       const stats = store.getStats();
       return {
         content: [
