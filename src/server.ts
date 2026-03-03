@@ -7,7 +7,7 @@ import { createStore } from "./store.js";
 import { indexVault } from "./indexer.js";
 import { embed, init as initEmbedder } from "./embedder.js";
 
-export async function startServer(vaultPath: string) {
+export async function startServer(vaultPath: string, indexing: boolean=false) {
   const resolvedPath = path.resolve(vaultPath);
   const dbPath = path.join(resolvedPath, ".obsidian-mcp.db");
   const store = createStore(dbPath);
@@ -20,11 +20,13 @@ export async function startServer(vaultPath: string) {
   console.error(`Vault: ${resolvedPath}`);
   console.error(`Database: ${dbPath}`);
 
-  console.error("Indexing vault (incremental)...");
-  await indexVault(resolvedPath, store, { ignoredKeys });
+  if (indexing) {
+    console.error("Indexing vault (incremental)...");
+    await indexVault(resolvedPath, store, { ignoredKeys });
+  }
 
   const server = new McpServer({
-    name: "obsidian-vault",
+    name: "obsidian-mcp",
     version: "0.1.0",
   });
 
